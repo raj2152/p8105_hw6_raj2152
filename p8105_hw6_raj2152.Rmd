@@ -1,0 +1,158 @@
+---
+title: "p8105_hw6_raj2152"
+author: "Rachelle Juan"
+date: "12/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(p8105.datasets)
+library(viridis)
+library(modelr)
+library(mgcv)
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = FALSE,
+	fig.width = 8, 
+  fig.height = 6,
+  out.width = "90%"
+)
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+```
+
+## Problem 1
+
+Load the data
+```{r}
+bwt_df = read_csv("./data/birthweight.csv") %>% 
+  janitor::clean_names()
+```
+
+Clean the data: drop missings, convert numeric to factor for categorical variables, set reference group for categorical variables using `fct_inseq`. There were no missing values.
+```{r}
+bwt_df = 
+  bwt_df %>% 
+  drop_na() %>% 
+  mutate(
+    babysex = factor(babysex),
+    frace = factor(frace),
+    malform = factor(malform),
+    mrace = factor(mrace)
+  ) %>% 
+  mutate(
+    babysex = fct_inseq(babysex),
+    frace = fct_inseq(frace),
+    malform = fct_inseq(malform),
+    mrace = fct_inseq(mrace)
+  )
+```
+
+
+**Regression model for birthweight**: I considered birthweight as an outcome that may depend on mother's age at delivery, previous number of low birth weight babies, and average number of cigarettes smoked per day during pregnancy. This model is based on a hypothesized understanding of the variables that influence baby's birthweight from the perspective of the mother's demographics and health. I started with fitting a linear model.
+
+```{r}
+fit = lm(bwt ~ momage + pnumlbw + smoken, data = bwt_df)
+summary(fit)
+
+fit %>% 
+  broom::tidy()
+```
+We see that, on average, a 1-year increase in mother's age in years significantly increases baby's birthweight by 18.8 grams. `smoken` was also significant in the model (p<0.05). My final model will remove `pnumlbw` since all values in this column are zero.
+
+```{r}
+model1 = lm(bwt ~ momage + smoken, data = bwt_df)
+summary(model1)
+
+model1 %>% 
+  broom::tidy()
+```
+In this new model, `momage` and `smoken` are reliable predictors of `bwt`.
+
+The plot of residuals for `momage` and `smoken` show an equal distribution of the residuals, therefore, there is no violation of our model assumptions. We see some outliers of `smoken`. 
+```{r}
+bwt_df %>% 
+  modelr::add_residuals(model1) %>% 
+  ggplot(aes(x = momage, y = resid)) +
+  geom_point() +
+  labs(
+    title = "momage: Model Residuals Against Fitted Values"
+  )
+
+bwt_df %>% 
+  modelr::add_predictions(model1) %>% 
+  ggplot(aes(x = momage, y = bwt)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red") +
+  labs(
+    title = "momage: Predictions Against Fitted Values"
+  )
+
+bwt_df %>% 
+  modelr::add_residuals(model1) %>% 
+  ggplot(aes(x = smoken, y = resid)) +
+  geom_point() +
+  labs(
+    title = "smoken: Model Residuals Against Fitted Values"
+  )
+
+bwt_df %>% 
+  modelr::add_predictions(model1) %>% 
+  ggplot(aes(x = smoken, y = bwt)) + geom_point() + 
+  geom_line(aes(y = pred), color = "red") +
+  labs(
+    title = "smoken: Predictions Against Fitted Values"
+  )
+```
+
+### Compare to other models
+```{r}
+model2 = lm(bwt ~ blength + gaweeks, data = bwt_df)
+model3 = lm(bwt ~ bhead * blength * babysex, data = bwt_df)
+```
+
+Cross-validation
+```{r}
+cv_df = crossv_mc(bwt_df, 100)
+
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+
+cv_df = 
+  cv_df %>% 
+  mutate(
+    model1  = map(train, ~lm(bwt ~ momage + smoken, data = .x)),
+    model2 = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    model3 = map(train, ~lm(bwt ~ bhead * blength * babysex, data = .x))
+    ) %>% 
+  mutate(
+    rmse_model1 = map2_dbl(model1, test, ~rmse(model = .x, data = .y)),
+    rmse_model2 = map2_dbl(model2, test, ~rmse(model = .x, data = .y)),
+    rmse_model3 = map2_dbl(model3, test, ~rmse(model = .x, data = .y))
+    )
+```
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+From the plot of models against rmse, we see that model3 is the best fit model, followed by model2, and then model1. 
+
+
