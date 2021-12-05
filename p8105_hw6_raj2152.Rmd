@@ -11,6 +11,7 @@ library(p8105.datasets)
 library(viridis)
 library(modelr)
 library(mgcv)
+library(purrr)
 
 knitr::opts_chunk$set(
 	echo = TRUE,
@@ -156,7 +157,8 @@ cv_df %>%
 From the plot of models against rmse, we see that model3 is the best fit model, followed by model2, and then model1. 
 
 ## Problem 2
-Load the data:
+
+Load the data
 ```{r}
 weather_df = 
   rnoaa::meteo_pull_monitors(
@@ -171,4 +173,90 @@ weather_df =
   select(name, id, everything())
 ```
 
+Create function to generate bootstrap samples and check to see if it's working.
+```{r}
+set.seed(1) 
 
+boot_sample = function(df) {
+  sample_frac(df, replace = TRUE)
+}
+
+
+boot_sample(weather_df) %>% 
+  ggplot(aes(x = tmin, y = tmax)) + 
+  geom_point() +
+  stat_smooth(method = "lm")
+```
+
+Draw 5000 bootstrap samples
+```{r}
+boot_straps = 
+  data_frame(
+    strap_number = 1:5000, 
+    strap_sample = rerun(5000, boot_sample(weather_df))
+  )
+```
+
+Create bootstrap results.
+```{r}
+bootstrap_results = 
+  boot_straps %>% 
+  mutate(
+    models = map(strap_sample, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::tidy)) %>% 
+  select(-strap_sample, -models) %>% 
+  unnest(results) 
+
+bootstrap_results_r = 
+  boot_straps %>% 
+  mutate(
+    models = map(strap_sample, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::glance)) %>% 
+  select(-strap_sample, -models) %>% 
+  unnest(results) %>% 
+  select(strap_number, r.squared)
+
+bootstrap_results_log =
+  bootstrap_results %>% 
+    mutate(log_estimate = log(estimate)) %>% 
+    group_by(strap_number) %>% 
+    summarise(log_b0b1 = sum(log_estimate)) 
+
+bootstrap_results_final = 
+  merge(bootstrap_results_r, bootstrap_results_log, by = "strap_number")
+```
+
+*Plot the distribution of r2 and log estimates:* 
+```{r}
+plot_rsq = 
+  bootstrap_results_final %>% 
+  ggplot(aes(x = r.squared)) +
+  geom_density(size = 1) +
+  labs(
+    title = "Plot of R-sqaured distribution"
+  )
+
+plot_log = 
+  bootstrap_results_final %>% 
+  ggplot(aes(x = log_b0b1)) +
+  geom_density(size = 1) +
+  labs(
+    title = "Plot of log(b0*b1) distribution"
+  )
+```
+The plots of both the R-squared and log(b0b1) distribution appear to be normally distributed. The R-squared distribution is centered around 0.91 and the plot of the log(b0b1) is centered around 2.02. 
+
+
+*Identify confidence intervals:* 
+```{r}
+ci_rsq = 
+  bootstrap_results_final %>% 
+  pull(r.squared) %>% 
+  quantile(., probs = c(0.025, 0.975), na.rm = TRUE)
+
+ci_log = 
+  bootstrap_results_final %>% 
+  pull(log_b0b1) %>% 
+  quantile(., probs = c(0.025, 0.975), na.rm = TRUE)
+```
+For *R-squared*, the 95% C.I. is 0.8938 to 0.9271. For *log(b0b1)*, the 95% C.I. is 1.9659 to 2.0604. 
